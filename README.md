@@ -83,3 +83,79 @@ print(chat_history.messages)
 ### Vectorstore
 
 See example for the [PGVector vectorstore here](https://github.com/langchain-ai/langchain-postgres/blob/main/examples/vectorstore.ipynb)
+
+### Langgraph Checkpointer
+
+#### Asynchronous
+
+The `AsyncPostgresSaver` is an asynchronous implementation of the `Checkpointer` interface for Postgres using psycopg3.
+This version does not support the synchronous methods.
+
+```python
+import asyncio
+from psycopg_pool import AsyncConnectionPool
+from langgraph.graph import StateGraph
+from langchain_postgres import AsyncPostgresSaver
+
+builder = StateGraph(int)
+builder.add_node("add_one", lambda x: x + 1)
+builder.set_entry_point("add_one")
+builder.set_finish_point("add_one")
+
+# Psql pool instantiation
+conn_str = "postgresql://langchain:langchain@localhost/langchain"
+pool = AsyncConnectionPool(conn_str, open=False)
+
+async def open_pool():
+    await pool.open()
+    await pool.wait()
+    print("Connection pool opened")
+
+
+asyncio.run(open_pool())
+memory = AsyncPostgresSaver(pool=pool)
+asyncio.run(memory.setup())
+
+# graph definition
+builder = StateGraph(int)
+builder.add_node("add_one", lambda x: x + 1)
+builder.add_node("plus_3", lambda x: x *3)
+builder.set_entry_point("add_one")
+builder.add_edge("add_one", "plus_3")
+builder.set_finish_point("plus_3")
+
+graph = builder.compile(checkpointer=memory)
+
+config = {"configurable": {"thread_id": "thread-2"}}
+coro = graph.ainvoke(1, config)
+result = asyncio.run(coro)
+
+```
+
+Examples using the checkpointer methods.
+```python
+# aput
+config = {"configurable": {"thread_id": "4"}}
+checkpoint = {"id": "1ef22622-3c49-644c-8001-9f11636714ba", "ts": "2023-05-03T10:00:00Z", "data": {"key": "value"}}
+metadata = {"step": -1, "source": "input", "writes": 1}
+asyncio.run(memory.aput(config=config, checkpoint=checkpoint, metadata=metadata))
+
+# asearch
+from langgraph.checkpoint.base import CheckpointMetadata
+metadata_filter = CheckpointMetadata(step=1)
+
+async def search():
+    async for item in memory.asearch(metadata_filter=metadata_filter):
+        print(item)
+asyncio.run(search())
+
+
+# alist
+
+config = {"configurable": {"thread_id": "4"}}
+async def list():
+    async for item in memory.alist(config=config):
+        print(item)
+asyncio.run(list())
+
+```
