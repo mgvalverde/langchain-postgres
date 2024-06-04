@@ -132,14 +132,13 @@ class AsyncPostgresSaver(BaseCheckpointSaver):
 
     async def aget_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
 
-        await self.setup()
-        thread_id = config["configurable"]["thread_id"]
+        thread_id = str(config["configurable"]["thread_id"])
         thread_ts = config["configurable"].get("thread_ts")
 
         if thread_ts:
+            thread_ts = str(thread_ts)
             query = f"""
-                SELECT checkpoint, parent_ts, metadata 
-                FROM {self.table_name} 
+                SELECT checkpoint, parent_ts, metadata FROM {self.table_name} 
                 WHERE thread_id = %s AND thread_ts = %s
             """
             args = (thread_id, thread_ts)
@@ -164,38 +163,29 @@ class AsyncPostgresSaver(BaseCheckpointSaver):
                         else None
                     ),
                 )
-            else:
-                query = f"""
-                    SELECT checkpoint, thread_ts, parent_ts, metadata 
-                    FROM {self.table_name} 
-                    WHERE thread_id = %s
-                    ORDER BY thread_ts DESC LIMIT 1
-                """
-                args = (thread_id,)
-                async with self._get_async_cursor() as cursor:
-                    await cursor.execute(query, args)
-                    value = await cursor.fetchone()
-                if value:
-                    return CheckpointTuple(
-                        {
-                            "configurable": {
-                                "thread_id": value[0],
-                                "thread_ts": value[1],
-                            }
-                        },
-                        self.serde.loads(value[3]),
-                        self.serde.loads(value[4]) if value[4] is not None else {},
-                        (
-                            {
-                                "configurable": {
-                                    "thread_id": value[0],
-                                    "thread_ts": value[2],
-                                }
-                            }
-                            if value[2]
-                            else None
-                        ),
-                    )
+        else:
+            query = f"""
+                SELECT thread_id, thread_ts, parent_ts, checkpoint, metadata 
+                FROM {self.table_name}
+                WHERE thread_id = %s
+                ORDER BY thread_ts 
+                DESC LIMIT 1
+            """
+            args = (thread_id,)
+            async with self._get_async_cursor() as cursor:
+                await cursor.execute(query, args)
+                value = await cursor.fetchone()
+            if value:
+                return CheckpointTuple(
+                    {"configurable": {"thread_id": value[0],"thread_ts": value[1]}},
+                    self.serde.loads(value[3]),
+                    self.serde.loads(value[4]) if value[4] is not None else {},
+                    (
+                        {"configurable": {"thread_id": value[0], "thread_ts": value[2],}}
+                        if value[2]
+                        else None
+                    ),
+                )
 
     async def aput(self, config: RunnableConfig,
                    checkpoint: Checkpoint,
@@ -207,6 +197,7 @@ class AsyncPostgresSaver(BaseCheckpointSaver):
         VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (thread_id, thread_ts)  
         DO UPDATE SET
+         parent_ts = EXCLUDED.parent_ts,
          checkpoint = EXCLUDED.checkpoint,
          metadata = EXCLUDED.metadata
         ;
@@ -236,10 +227,15 @@ class AsyncPostgresSaver(BaseCheckpointSaver):
             limit: Optional[int] = None,
     ) -> AsyncIterator[CheckpointTuple]:
         if before is None:
-            query = f"SELECT thread_id, thread_ts, parent_ts, checkpoint, metadata FROM {self.table_name} WHERE thread_id = %s ORDER BY thread_ts DESC"
+            query = ("SELECT thread_id, thread_ts, parent_ts, checkpoint, metadata "
+                     f"FROM {self.table_name} "
+                     "WHERE thread_id = %s ORDER BY thread_ts DESC")
             args = (str(config["configurable"]["thread_id"]),)
         else:
-            query = f"SELECT thread_id, thread_ts, parent_ts, checkpoint, metadata FROM {self.table_name} WHERE thread_id = %s AND thread_ts < %s ORDER BY thread_ts DESC"
+            query = ("SELECT thread_id, thread_ts, parent_ts, checkpoint, metadata"
+                     f" FROM {self.table_name}"
+                     " WHERE thread_id = %s AND thread_ts < %s "
+                     "ORDER BY thread_ts DESC")
             args = (
                 str(config["configurable"]["thread_id"]),
                 str(before["configurable"]["thread_ts"]),
@@ -252,10 +248,10 @@ class AsyncPostgresSaver(BaseCheckpointSaver):
             await cursor.execute(query, args)
             async for thread_id, thread_ts, parent_ts, value, metadata in cursor:
                 yield CheckpointTuple(
-                    {"configurable": {"thread_id": thread_id, "thread_ts": thread_ts}},
-                    self.serde.loads(value),
-                    self.serde.loads(metadata) if metadata is not None else {},
-                    (
+                    config={"configurable": {"thread_id": thread_id, "thread_ts": thread_ts}},
+                    checkpoint=self.serde.loads(value),
+                    metadata=self.serde.loads(metadata) if metadata is not None else {},
+                    parent_config=(
                         {
                             "configurable": {
                                 "thread_id": thread_id,
