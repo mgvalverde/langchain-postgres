@@ -3,6 +3,8 @@ from importlib import metadata
 from langchain_postgres.chat_message_histories import PostgresChatMessageHistory
 from langchain_postgres.translator import PGVectorTranslator
 from langchain_postgres.vectorstores import PGVector
+from .checkpointer.checkpointer import AsyncPostgresSaver
+from .checkpointer.serde import PsycoPgSerializer
 
 try:
     __version__ = metadata.version(__package__)
