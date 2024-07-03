@@ -17,4 +17,5 @@ __all__ = [
     "PostgresChatMessageHistory",
     "PGVector",
     "PGVectorTranslator",
+    "AsyncPostgresSaver",
 ]
